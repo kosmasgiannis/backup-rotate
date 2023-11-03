@@ -1,0 +1,4 @@
+*.log
+backups
+*.conf
+s3.cfg

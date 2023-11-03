@@ -1,0 +1,1 @@
+00 * * * *    root test -x /path/to/backup-rotate/backuprotate.sh && ( cd /tmp && /path/to/backup-rotate/backuprotate.sh /path/to/backup-rotate/backuprotate.conf )

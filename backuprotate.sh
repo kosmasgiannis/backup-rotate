@@ -209,32 +209,32 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
       'mysql') 
 
               port=`toml2js "$config" | jq -r -M ".$section.port"`
-              if [ $port == "null" ]; then
+              if [ "x$port" == "xnull" ]; then
                 port=""
               fi
 
               host=`toml2js "$config" | jq -r -M ".$section.host"`
-              if [ $host == "null" ]; then
+              if [ "x$host" == "xnull" ]; then
                 host="localhost"
               fi
 
               username=`toml2js "$config" | jq -r -M ".$section.username"`
-              if [ $username == "null" ]; then
+              if [ "x$username" == "xnull" ]; then
                 username=""
               fi
 
               password=`toml2js "$config" | jq -r -M ".$section.password"`
-              if [ $password == "null" ]; then
+              if [ "x$password" == "xnull" ]; then
                 password=""
               fi
 
               extradumpparameters=`toml2js "$config" | jq -r -M ".$section.extradumpparameters"`
-              if [ $extradumpparameters == "null" ]; then
+              if [ "x$extradumpparameters" == "xnull" ]; then
                 extradumpparameters=""
               fi
 
               database=`toml2js "$config" | jq -r -M ".$section.database"`
-              if [ $database == "null" ]; then
+              if [ "x$database" == "xnull" ]; then
                 echo "Database not set in $section, skipping..."
                 skip="yes"
               fi
@@ -247,7 +247,7 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
               MYSQLHOST=""
               MYSQLPORT=""
               [ -n "$username" ] && MYSQLUSER=" -u$username "
-              [ -n "$password" ] && MYSQLPASS=" -p$password "
+              [ -n "$password" ] && MYSQLPASS=" '-p$password' "
               [ -n "$host" ] && MYSQLHOST=" -h$host "
               [ -n "$port" ] && MYSQLPORT=" -P$port "
       ;;

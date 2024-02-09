@@ -46,6 +46,12 @@ if [ ! -r "$config" ]; then
   exit 2
 fi
 
+which mysqldump > /dev/null 2>&1
+
+if [ $? -ne 0 ]; then
+  abort 2 "Please install mysqldump. Exiting..." 
+fi
+
 which toml2js > /dev/null 2>&1
 
 if [ $? -ne 0 ]; then
@@ -200,8 +206,8 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
     fi
 
     if [ $debug == true ]; then
-      echo "bucket=$bucket, path=$mypath";
-      echo "hours=$hours, days=$days, weeks=$weeks, months=$months, years=$years";
+      echo "bucket=$bucket, path=$mypath" >> $LOGFILE;
+      echo "hours=$hours, days=$days, weeks=$weeks, months=$months, years=$years" >> $LOGFILE;
     fi
 
     type=`toml2js "$config" | jq -r -M ".$section.type"`
@@ -239,7 +245,7 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
                 skip="yes"
               fi
               if [ $debug == true ]; then
-                echo "host=$host, username=$username, password=$password, database=$database, schedule=$schedule";
+                echo "host=$host, username=$username, password=$password, database=$database, schedule=$schedule" >> $LOGFILE
               fi
 
               MYSQLUSER=""
@@ -247,7 +253,7 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
               MYSQLHOST=""
               MYSQLPORT=""
               [ -n "$username" ] && MYSQLUSER=" -u$username "
-              [ -n "$password" ] && MYSQLPASS=" '-p$password' "
+              [ -n "$password" ] && MYSQLPASS=" -p$password "
               [ -n "$host" ] && MYSQLHOST=" -h$host "
               [ -n "$port" ] && MYSQLPORT=" -P$port "
       ;;
@@ -258,7 +264,7 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
     esac
 
     if [ $skip == "no" ]; then
-      $debug && echo "Processing..."
+      $debug && echo "Processing..." >> $LOGFILE
       dir=`echo "/$mypath/" | sed 's/^\/\/*/\//' | sed 's/\/\/*$/\//'`
       if [ $cpmethod == "s3" ]; then
         dir="s3://$bucket/$dir$section"
@@ -267,7 +273,7 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
         dir="$dir$section"
       fi
 
-      $debug && echo $dir
+      $debug && echo $dir >> $LOGFILE
       outputfile=""
 
       if [[ ((($schedule == "hourly" ) && ($hour != "00")) || (( $hour == "00") && (( $schedule == "hourly" ) || ($schedule == "daily") || (($schedule == "weekly") && ($weekday == "1")) || (($schedule == "monthly") && ($day=="01")) || (($schedule == "annually") && ("$month/$day" == "01/01")) ))) ]]; then
@@ -276,8 +282,12 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
             'mysql') 
                     outputfile="$dumpdir/$database.sql.gz"
                     rm -f "$outputfile"
-                    mysqldump "$extradumpparameters" $MYSQLUSER $MYSQLPASS $MYSQLHOST $MYSQLPORT $database  | gzip > "$outputfile"
+		    mysqldump "$extradumpparameters" $MYSQLUSER $MYSQLPASS $MYSQLHOST $MYSQLPORT $database | gzip > "$outputfile"
                     rc=${PIPESTATUS[0]}
+                    $debug && echo "mysqldump $extradumpparameters $MYSQLUSER $MYSQLPASS $MYSQLHOST $MYSQLPORT $database " >> $LOGFILE
+                    if [ $rc -ne 0 ]; then
+                      echo "mysqldump exited with code = $rc" >> $LOGIFILE
+                    fi
             ;;
             *) 
             ;;
@@ -333,7 +343,7 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
             rm -f "$dumpdir/$database.sql.gz"
           fi
         else
-          echo "Failed to perform mysqldump for $section"
+          echo "Failed to perform mysqldump for $section" >> $LOGIFILE
         fi
 
       fi

@@ -128,7 +128,7 @@ function prune () {
    fi
    rm -f /tmp/.backuprotate.tmp
  else
-   find "$base/$dir" -type d -mindepth 1 -maxdepth 1| sort -rn | awk " NR > $keep" | while read f; do rm -rf "$f"; done
+   find "$base/$dir" -mindepth 1 -maxdepth 1 -type d | sort -rn | awk " NR > $keep" | while read f; do rm -rf "$f"; done
  fi
 }
 

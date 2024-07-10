@@ -333,11 +333,11 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
             fi
           fi
 
-          [ $hours=="all" ] || prune "$dir" "hourly" $hours $cpmethod
-          [ $days=="all" ] || prune "$dir" "daily" $days $cpmethod
-          [ $weeks=="all" ] || prune "$dir" "weekly" $weeks $cpmethod
-          [ $months=="all" ] || prune "$dir" "monthly" $months $cpmethod
-          [ $years=="all" ] || prune "$dir" "annually" $years $cpmethod
+          [ $hours == "all" ] || prune "$dir" "hourly" $hours $cpmethod
+          [ $days == "all" ] || prune "$dir" "daily" $days $cpmethod
+          [ $weeks == "all" ] || prune "$dir" "weekly" $weeks $cpmethod
+          [ $months == "all" ] || prune "$dir" "monthly" $months $cpmethod
+          [ $years == "all" ] || prune "$dir" "annually" $years $cpmethod
   
           if [ -n "$outputfile" ]; then
             rm -f "$dumpdir/$database.sql.gz"

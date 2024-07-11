@@ -113,10 +113,10 @@ fi
 mkdir -p "$dumpdir"
 
 function prune () {
-  base=$1
-  dir=$2
-  keep=$3
-  cpcmp=$4
+  local base=$1
+  local dir=$2
+  local keep=$3
+  local cpcmp=$4
  if [ $cpmethod == "s3" ]; then
    s3cmd -c $S3CFG ls "$base/$dir/" 2>&1 | sed 's/^ *DIR *//' > /tmp/.backuprotate.tmp
    grep '^ERROR' /tmp/.backuprotate.tmp 2>&1

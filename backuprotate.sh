@@ -6,7 +6,7 @@
 # Date    : 01 Sep 2017
 # License : MIT
 #
-# Requirements : s3cmd, jq, node, toml2js, mysqldump
+# Requirements : s3cmd, jq, node, toml2js, mysqldump, yaz-client
 debug=false
 
 [ -h $0 ] && scriptname=`readlink $0` || scriptname=$0
@@ -48,6 +48,9 @@ fi
 
 which mysqldump > /dev/null 2>&1
 installed_mysqldump=$?
+
+which yaz-client > /dev/null 2>&1
+installed_yazclient=$?
 
 which toml2js > /dev/null 2>&1
 
@@ -261,6 +264,92 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
               [ -n "$port" ] && MYSQLPORT=" -P$port "
       ;;
 
+      'zebra')
+              if [ $installed_yazclient -ne 0 ]; then
+                echo "Please install yaz-client. Skipping..."
+                skip="yes"
+              fi
+
+              if [ "$(LC_ALL=C type -t zebradump)" != "function" ]; then
+                function zebradump() {
+                  zurl=$1
+                  fname=$2
+                  auth=$3
+                  #basedir="${2:-.}"
+                  #dir=$(date +%Y%m%d)
+                  #mkdir -p "$basedir/$dir"
+                  #fname="$basedir/$dir/${1/*\//}_$(date +%Y%m%d%H%M).mrc"
+                  #rm -f $fname
+
+                  if [ -n "$3" ]; then
+                    authentication="authentication $auth\n"
+                  else
+                    authentication=""
+                  fi
+
+                  local x
+                  local i
+
+                  allrecs=`yaz-client $zurl <<< "${authentication}find @attr 1=_ALLRECORDS @attr 2=103 ''" | grep hits | sed 's/.*: //' | sed 's/,.*//'`
+
+                  if [ -n "$allrecs" ]; then
+
+                    s="${authentication}open $zurl\nfind @attr 1=_ALLRECORDS @attr 2=103 ''\n"
+
+                    for i in `seq 1 1000 $allrecs`; do
+                      x=$(($i+1000))
+                      if [ $x -ge $allrecs ]; then
+                        x=$(($allrecs-$i+1))
+                      else
+                        x=1000
+                      fi
+                      s="$s\nshow $i+$x"
+                    done
+
+                    s="$s\nquit\n"
+
+                    echo -e $s | yaz-client -m $fname > /dev/null
+                    gzip $fname
+                    return 0
+                  else
+                    return 1
+                  fi
+                }
+
+              fi
+
+              port=`toml2js "$config" | jq -r -M ".$section.port"`
+              if [ "x$port" == "xnull" ]; then
+                port="210"
+              fi
+
+              host=`toml2js "$config" | jq -r -M ".$section.host"`
+              if [ "x$host" == "xnull" ]; then
+                host="localhost"
+              fi
+
+              username=`toml2js "$config" | jq -r -M ".$section.username"`
+              if [ "x$username" == "xnull" ]; then
+                username=""
+              fi
+
+              password=`toml2js "$config" | jq -r -M ".$section.password"`
+              if [ "x$password" == "xnull" ]; then
+                password=""
+              fi
+
+              database=`toml2js "$config" | jq -r -M ".$section.database"`
+              if [ "x$database" == "xnull" ]; then
+                echo "Database not set in $section, skipping..."
+                skip="yes"
+              fi
+              if [ $debug == true ]; then
+                echo "host=$host, username=$username, password=$password, database=$database, schedule=$schedule" >> $LOGFILE
+              fi
+
+
+      ;;
+
       *)
               skip="yes"
       ;;
@@ -290,10 +379,22 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
                     rc=${PIPESTATUS[0]}
                     $debug && echo "mysqldump $extradumpparameters $MYSQLUSER $MYSQLPASS $MYSQLHOST $MYSQLPORT $database " >> $LOGFILE
                     if [ $rc -ne 0 ]; then
-                      echo "mysqldump exited with code = $rc" >> $LOGIFILE
+                      echo "mysqldump exited with code = $rc" >> $LOGFILE
                     fi
             ;;
-
+            'zebra')
+                    outputfile="$dumpdir/$database.mrc.gz"
+                    outputfile2="$dumpdir/$database.mrc"
+                    outputbasefile="$database.mrc.gz"
+                    if [ -n "$username" ]; then
+                       auth="$username/$password"
+                    else
+                       auth=""
+                    fi
+                    rm -f "$outputfile" "$outputfile2"
+                    zebradump "$host:$port/$database" "$outputfile2" "$auth"
+                    rc=$?
+            ;;
             *)
             ;;
         esac
@@ -348,10 +449,12 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
             rm -f "$dumpdir/$outputbasefile"
           fi
         else
-          echo "Failed to perform mysqldump for $section" >> $LOGIFILE
+          echo "Failed to perform dump for $section" >> $LOGFILE
         fi
 
       fi
     fi
   fi
 done
+
+#

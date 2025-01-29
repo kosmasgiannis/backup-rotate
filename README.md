@@ -5,6 +5,7 @@
 # Features
 
  * Backup via mysqldump MySQL Databases
+ * Backup via yaz-client Zebra Databases
  * Schedule backups on hourly, daily, weekly, monthly or annually basis
  * keep all or up to specific number of backups for each period
  * copy backups to specific location on local server or upload to an AWS S3 bucket
@@ -15,6 +16,7 @@
  * [jq](https://jqlang.github.io/jq)
  * [toml2js](https://www.npmjs.com/package/toml2js)
  * [mysqldump](https://dev.mysql.com/doc/refman/8.0/en/mysqldump.html)
+ * [yaz](https://www.indexdata.com/resources/software/yaz)
  * [s3cmd](https://s3tools.org/s3cmd)
 
 # sample config
@@ -42,6 +44,20 @@
     weeks=52
     months=24
     years="all"
+
+    [zebradb]
+    type="zebra"
+    cpmethod="cp"
+    schedule="hourly"
+    host="127.0.0.1"
+    database="marcdb"
+    port=210
+    path="./backups"
+    hours=1
+    days=1
+    weeks=0
+    months=0
+    years=0
 
     [otherdb]
     # schedule: hourly, daily, weekly,  monthly, annually

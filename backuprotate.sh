@@ -38,7 +38,7 @@ function abort() {
 if [ -n "$1" ]; then
   config=$1
 else
-  abort 2 "Please specify config file." 
+  abort 2 "Please specify config file."
 fi
 
 if [ ! -r "$config" ]; then
@@ -47,15 +47,12 @@ if [ ! -r "$config" ]; then
 fi
 
 which mysqldump > /dev/null 2>&1
-
-if [ $? -ne 0 ]; then
-  abort 2 "Please install mysqldump. Exiting..." 
-fi
+installed_mysqldump=$?
 
 which toml2js > /dev/null 2>&1
 
 if [ $? -ne 0 ]; then
-  abort 2 "Please install toml2js. Exiting..." 
+  abort 2 "Please install toml2js. Exiting..."
 fi
 
 os=`uname -s`
@@ -92,7 +89,7 @@ dday=$((10#$day))
 which jq > /dev/null 2>&1
 
 if [ $? -ne 0 ]; then
-  abort 2 "Please install jq. Exiting..." 
+  abort 2 "Please install jq. Exiting..."
 fi
 
 toml2js "$config" > /dev/null 2>&1
@@ -149,7 +146,7 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
       echo "Please specify method of copy (cpmethod)..." >> $LOGFILE
       skip="yes"
     fi
-   
+
     if [ $cpmethod == "s3" ]; then
       which s3cmd > /dev/null 2>&1
 
@@ -214,7 +211,11 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
 
     type=`toml2js "$config" | jq -r -M ".$section.type"`
     case "$type" in
-      'mysql') 
+      'mysql')
+              if [ $installed_mysqldump -ne 0 ]; then
+                echo "Please install mysqldump. Skipping..."
+                skip="yes"
+              fi
 
               port=`toml2js "$config" | jq -r -M ".$section.port"`
               if [ "x$port" == "xnull" ]; then
@@ -260,7 +261,7 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
               [ -n "$port" ] && MYSQLPORT=" -P$port "
       ;;
 
-      *) 
+      *)
               skip="yes"
       ;;
     esac
@@ -281,8 +282,9 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
       if [[ ((($schedule == "hourly" ) && ($hour != "00")) || (( $hour == "00") && (( $schedule == "hourly" ) || ($schedule == "daily") || (($schedule == "weekly") && ($weekday == "1")) || (($schedule == "monthly") && ($day=="01")) || (($schedule == "annually") && ("$month/$day" == "01/01")) ))) ]]; then
 
         case "$type" in
-            'mysql') 
+            'mysql')
                     outputfile="$dumpdir/$database.sql.gz"
+                    outputbasefile="$database.sql.gz"
                     rm -f "$outputfile"
 		    mysqldump "$extradumpparameters" $MYSQLUSER $MYSQLPASS $MYSQLHOST $MYSQLPORT $database | gzip > "$outputfile"
                     rc=${PIPESTATUS[0]}
@@ -291,7 +293,8 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
                       echo "mysqldump exited with code = $rc" >> $LOGIFILE
                     fi
             ;;
-            *) 
+
+            *)
             ;;
         esac
 
@@ -299,39 +302,39 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
           if [[ ((( $hour == "00") && ($day == "01") && ($month == "01") && (( $schedule == "hourly" ) || ($schedule == "daily") || ($schedule == "monthly") || ($schedule == "annually"))) ||
              (( $hour == "00") && ($month == "01") && ($weekday == "1") && ( $schedule == "weekly" ) && ($dday -lt 8))) ]]; then
             if [ $cpmethod == "s3" ]; then
-              s3cmd --no-progress -c $S3CFG put "$dumpdir/$database.sql.gz" "$dir/annually/$datestamp/$database.sql.gz" 2>&1 >> $LOGFILE
+              s3cmd --no-progress -c $S3CFG put "$outputfile" "$dir/annually/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
             else
               mkdir -p "$dir/annually/$datestamp"
-              mv "$dumpdir/$database.sql.gz" "$dir/annually/$datestamp/$database.sql.gz" 2>&1 >> $LOGFILE
+              mv "$outputfile" "$dir/annually/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
             fi
           elif [[ ((( $hour == "00") && ($day == "01") && (( $schedule == "hourly" ) || ($schedule == "daily") || ($schedule == "monthly"))) ||
              (( $hour == "00") && ($weekday == "1") && ( $schedule == "weekly" ) && ($dday -lt 8))) ]]; then
             if [ $cpmethod == "s3" ]; then
-              s3cmd --no-progress -c $S3CFG put "$dumpdir/$database.sql.gz" "$dir/monthly/$datestamp/$database.sql.gz" 2>&1 >> $LOGFILE
+              s3cmd --no-progress -c $S3CFG put "$outputfile" "$dir/monthly/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
             else
               mkdir -p "$dir/monthly/$datestamp"
-              cp "$dumpdir/$database.sql.gz" "$dir/monthly/$datestamp/$database.sql.gz" 2>&1 >> $LOGFILE
+              cp "$outputfile" "$dir/monthly/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
             fi
           elif [[ (( $hour == "00") && ($weekday == "1") && (( $schedule == "hourly" ) || ($schedule == "daily") || ($schedule == "weekly"))) ]]; then
             if [ $cpmethod == "s3" ]; then
-              s3cmd --no-progress -c $S3CFG put "$dumpdir/$database.sql.gz" "$dir/weekly/$datestamp/$database.sql.gz" 2>&1 >> $LOGFILE
+              s3cmd --no-progress -c $S3CFG put "$outputfile" "$dir/weekly/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
             else
               mkdir -p "$dir/weekly/$datestamp"
-              cp "$dumpdir/$database.sql.gz" "$dir/weekly/$datestamp/$database.sql.gz" 2>&1 >> $LOGFILE
+              cp "$outputfile" "$dir/weekly/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
             fi
           elif [[ (( $hour == "00") && (( $schedule == "hourly" ) || ($schedule == "daily") )) ]]; then
             if [ $cpmethod == "s3" ]; then
-              s3cmd --no-progress -c $S3CFG put "$dumpdir/$database.sql.gz" "$dir/daily/$datestamp/$database.sql.gz" 2>&1 >> $LOGFILE
+              s3cmd --no-progress -c $S3CFG put "$outputfile" "$dir/daily/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
             else
               mkdir -p "$dir/daily/$datestamp"
-              cp "$dumpdir/$database.sql.gz" "$dir/daily/$datestamp/$database.sql.gz" 2>&1 >> $LOGFILE
+              cp "$outputfile" "$dir/daily/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
             fi
           elif [ $schedule == "hourly" ]; then
             if [ $cpmethod == "s3" ]; then
-              s3cmd --no-progress -c $S3CFG put "$dumpdir/$database.sql.gz" "$dir/hourly/$datestamp/$database.sql.gz" 2>&1 >> $LOGFILE
+              s3cmd --no-progress -c $S3CFG put "$outputfile" "$dir/hourly/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
             else
               mkdir -p "$dir/hourly/$datestamp"
-              cp "$dumpdir/$database.sql.gz" "$dir/hourly/$datestamp/$database.sql.gz" 2>&1 >> $LOGFILE
+              cp "$outputfile" "$dir/hourly/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
             fi
           fi
 
@@ -340,9 +343,9 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
           [ $weeks == "all" ] || prune "$dir" "weekly" $weeks $cpmethod
           [ $months == "all" ] || prune "$dir" "monthly" $months $cpmethod
           [ $years == "all" ] || prune "$dir" "annually" $years $cpmethod
-  
+
           if [ -n "$outputfile" ]; then
-            rm -f "$dumpdir/$database.sql.gz"
+            rm -f "$dumpdir/$outputbasefile"
           fi
         else
           echo "Failed to perform mysqldump for $section" >> $LOGIFILE

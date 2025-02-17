@@ -18,6 +18,8 @@
  * [mysqldump](https://dev.mysql.com/doc/refman/8.0/en/mysqldump.html)
  * [yaz](https://www.indexdata.com/resources/software/yaz)
  * [s3cmd](https://s3tools.org/s3cmd)
+ * [gzip](https://www.gnu.org/software/gzip)
+ * [ssh / scp](https://www.openssh.com/)
 
 # sample config
     
@@ -81,6 +83,11 @@
     weeks=52
     months=24
     years="all"
+    [[otherdb.copies]]
+    cpmethod="scp"
+    path="./backups"
+    sshuser="mruser@example.com"
+    sshparams="-o StrictHostKeyChecking=no -i ~/.ssh/my_rsa_key"
 
 # Run
 

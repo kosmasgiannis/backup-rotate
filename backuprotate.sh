@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # backuprotate
 #
@@ -7,12 +7,17 @@
 # License : MIT
 #
 # Requirements : s3cmd, jq, node, toml2js, mysqldump, yaz-client
+
+#set -x
 debug=false
 
 [ -h $0 ] && scriptname=`readlink $0` || scriptname=$0
 scriptdir=$(dirname $scriptname)
 scriptname=$(basename $scriptname .sh)
 lockfile="/tmp/$scriptname.lock"
+declare -A copies
+declare -A acopy
+copyno=-1
 
 if [ -r $lockfile ]; then
   pid=`cat $lockfile`
@@ -116,70 +121,172 @@ function prune () {
   local base=$1
   local dir=$2
   local keep=$3
-  local cpcmp=$4
- if [ $cpmethod == "s3" ]; then
-   s3cmd -c $S3CFG ls "$base/$dir/" 2>&1 | sed 's/^ *DIR *//' > /tmp/.backuprotate.tmp
-   grep '^ERROR' /tmp/.backuprotate.tmp 2>&1
-   rc=$?
-   if [ $rc != 0 ]; then
-     cat /tmp/.backuprotate.tmp | sort -rn | awk " NR > $keep" | while read f; do s3cmd --no-progress -c $S3CFG rm --recursive "$f"; done
-   else
-     echo "Fix the error and retry." >> $LOGFILE
-   fi
-   rm -f /tmp/.backuprotate.tmp
- else
-   if [ -d "$base/$dir" ]; then
-     find "$base/$dir" -mindepth 1 -maxdepth 1 -type d | sort -rn | awk " NR > $keep" | while read f; do rm -rf "$f"; done
-   fi
- fi
+  local cpmethod=$4
+  local sshuser=$5
+  local sshparams=$6
+  local S3CFG=$7
+  if [ $cpmethod == "s3" ]; then
+    s3cmd -c $S3CFG ls "$base/$dir/" 2>&1 | sed 's/^ *DIR *//' > /tmp/.backuprotate.tmp
+    grep '^ERROR' /tmp/.backuprotate.tmp 2>&1
+    rc=$?
+    if [ $rc != 0 ]; then
+      if [ -s /tmp/.backuprotate.tmp ]; then
+        while read f; do
+          echo "Deleting $f" >> $LOGFILE
+          s3cmd --no-progress -c $S3CFG rm --recursive "$f";
+        done < <( cat /tmp/.backuprotate.tmp | sort -rn | awk " NR > $keep")
+      fi
+    else
+      cat /tmp/.backuprotate.tmp >> $LOGIFLE
+      echo "Fix the error and retry." >> $LOGFILE
+    fi
+    rm -f /tmp/.backuprotate.tmp
+  elif [ $cpmethod == "scp" ]; then
+    isdir=`ssh $sshparams "$sshuser" file "$base/$dir" | sed 's/.*: //'`
+    if [ "$isdir" == "directory" ]; then
+      ssh -n $sshparams "$sshuser" find "$base/$dir" -mindepth 1 -maxdepth 1 -type d | sort -rn | awk " NR > $keep" > /tmp/.backuprotate.tmp
+      if [ -s /tmp/.backuprotate.tmp ]; then
+        while read f; do
+          echo "Deleting $f" >> $LOGFILE
+          ssh -n $sshparams "$sshuser" rm -rf "$f";
+        done < <( cat /tmp/.backuprotate.tmp )
+      fi
+      rm -f /tmp/.backuprotate.tmp
+    fi
+  else
+    if [ -d "$base/$dir" ]; then
+      while read f; do
+        echo "Deleting $f" >> $LOGFILE
+        rm -rf "$f";
+      done < <( find "$base/$dir" -mindepth 1 -maxdepth 1 -type d | sort -rn | awk " NR > $keep" )
+    fi
+  fi
 }
 
-for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
-  if [ $section != "_backuprotate_" ]; then
-    skip="no"
-    bucket=""
-    skipme=`toml2js "$config" | jq -r -M ".$section.skip"`
-    if [ "$skipme" == "yes" ]; then
-      echo "Skipping $section..." >> $LOGFILE
+function extractCopyParams () {
+  local config=$1
+  local section=$2
+  mypath=""
+  S3CFG=""
+  bucket=""
+  sshuser=""
+  sshparams=""
+  skip=""
+  message=""
+  cpmethod=`toml2js "$config" | jq -r -M "$section.cpmethod"`
+  if [ $cpmethod == "null" ]; then
+    skip="yes"
+    message="copy method not defined"
+  else
+    mypath=`toml2js "$config" | jq -r -M "$section.path"`
+    S3CFG=`toml2js "$config" | jq -r -M "$section.s3cfg"`
+    bucket=`toml2js "$config" | jq -r -M "$section.bucket"`
+    sshuser=`toml2js "$config" | jq -r -M "$section.sshuser"`
+    sshparams=`toml2js "$config" | jq -r -M "$section.sshparams"`
+    skip=`toml2js "$config" | jq -r -M "$section.skip"`
+    message=""
+    if [ $mypath == "null" ]; then
       skip="yes"
+      message="path not set in $section"
     fi
-
-    cpmethod=`toml2js "$config" | jq -r -M ".$section.cpmethod"`
-    if [ $cpmethod == "null" ]; then
-      echo "Please specify method of copy (cpmethod)..." >> $LOGFILE
-      skip="yes"
+    if [ "$sshparams" == "null" ]; then
+      sshparams=""
     fi
-
     if [ $cpmethod == "s3" ]; then
       which s3cmd > /dev/null 2>&1
 
       if [ $? -ne 0 ]; then
-        echo "Please install s3cmd or specify a different copy method" >> $LOGFILE
         skip="yes"
+        message="please install s3cmd or specify a different copy method"
       fi
 
-      S3CFG=`toml2js "$config" | jq -r -M ".$section.s3cfg"`
       if [ $S3CFG == "null" ]; then
-        echo "Please specify config file for s3cmd" >> $LOGFILE
         skip="yes"
+        message="please specify config file for s3cmd"
       fi
 
       if [ ! -r "$S3CFG" ]; then
-        echo "Please specify a valid config file for s3cmd" >> $LOGFILE
         skip="yes"
+        message="please specify a valid config file for s3cmd"
       fi
 
-      bucket=`toml2js "$config" | jq -r -M ".$section.bucket"`
       if [ $bucket == "null" ]; then
-        echo "Bucket not set in $section, skipping..." >> $LOGFILE
         skip="yes"
+        message="Bucket not set in $section"
       fi
     fi
-    mypath=`toml2js "$config" | jq -r -M ".$section.path"`
-    if [ $mypath == "null" ]; then
-      echo "Path not set in $section, skipping..." >> $LOGFILE
-      skip="yes"
+  fi
+  ((copyno++))
+  acopy=()
+  acopy["cpmethod"]=$cpmethod
+  acopy["path"]="$mypath"
+  acopy["bucket"]="$bucket"
+  acopy["s3cfg"]="$S3CFG"
+  acopy["sshuser"]="$sshuser"
+  acopy["sshparams"]="$sshparams"
+  acopy["skip"]="$skip"
+  acopy["message"]="$message"
+  for key in "${!acopy[@]}"; do
+    if [ $debug == true ]; then
+      echo "--> $key : " ${acopy[$key]} >> $LOGFILE
     fi
+    copies[$copyno,$key]=${acopy[$key]}
+  done
+}
+
+function copyDump () {
+  local cpmethod=$1
+  local outputfile=$2
+  local outputbasefile=$3
+  local destpath=$4
+  local sshuser=$5
+  local sshparams=$6
+  local S3CFG=$7
+
+  echo "Copying $outputfile using $cpmethod" >> $LOGFILE
+  if [ $cpmethod == "s3" ]; then
+    s3cmd --no-progress -c $S3CFG put "$outputfile" "$destpath/$outputbasefile" 2>&1 >> $LOGFILE
+  elif [ $cpmethod == "scp" ]; then
+    ssh -n $sshparams "$sshuser" mkdir -p "$destpath"
+    scp $sshparams "$outputfile" "$sshuser":"$destpath/$outputbasefile" 2>&1 >> $LOGFILE
+  else
+    mkdir -p "$destpath"
+    cp "$outputfile" "$destpath/$outputbasefile" 2>&1 >> $LOGFILE
+  fi
+}
+
+#
+# -- Main Loop
+#
+for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
+  if [ $section != "_backuprotate_" ]; then
+    skipsection="no"
+    copyno=-1
+    copies=()
+    skipme=`toml2js "$config" | jq -r -M ".$section.skip"`
+    if [ "$skipme" == "yes" ]; then
+      echo "Skipping $section..." >> $LOGFILE
+      continue
+    fi
+    echo "Processing $section..." >> $LOGFILE
+
+    copieslength=`toml2js "$config" | jq -r -M ".$section.copies | length"`
+    extractCopyParams "$config" ".$section"
+
+    if [ $cpmethod == "null" ]; then
+      if [ $copieslength -eq 0 ]; then
+        echo "Please specify method of copy (cpmethod)..." >> $LOGFILE
+        skipsection="yes"
+      fi
+    fi
+
+    if [ $copieslength -ne 0 ]; then
+      ((copieslength--))
+      for j in $(seq 0 $copieslength ); do
+        extractCopyParams "$config" ".$section.copies[$j]"
+      done
+    fi
+
     hours=`toml2js "$config" | jq -r -M ".$section.hours"`
     if [ $hours == "null" ]; then
       hours="all"
@@ -204,11 +311,10 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
     schedule=`toml2js "$config" | jq -r -M ".$section.schedule"`
     if [ $schedule == "null" ]; then
       echo "Schedule not set in $section, skipping..." >> $LOGFILE
-      skip="yes"
+      skipsection="yes"
     fi
 
     if [ $debug == true ]; then
-      echo "bucket=$bucket, path=$mypath" >> $LOGFILE;
       echo "hours=$hours, days=$days, weeks=$weeks, months=$months, years=$years" >> $LOGFILE;
     fi
 
@@ -217,7 +323,7 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
       'mysql')
               if [ $installed_mysqldump -ne 0 ]; then
                 echo "Please install mysqldump. Skipping..."
-                skip="yes"
+                skipsection="yes"
               fi
 
               port=`toml2js "$config" | jq -r -M ".$section.port"`
@@ -248,7 +354,7 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
               database=`toml2js "$config" | jq -r -M ".$section.database"`
               if [ "x$database" == "xnull" ]; then
                 echo "Database not set in $section, skipping..."
-                skip="yes"
+                skipsection="yes"
               fi
               if [ $debug == true ]; then
                 echo "host=$host, username=$username, password=$password, database=$database, schedule=$schedule" >> $LOGFILE
@@ -267,7 +373,7 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
       'zebra')
               if [ $installed_yazclient -ne 0 ]; then
                 echo "Please install yaz-client. Skipping..."
-                skip="yes"
+                skipsection="yes"
               fi
 
               if [ "$(LC_ALL=C type -t zebradump)" != "function" ]; then
@@ -341,31 +447,39 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
               database=`toml2js "$config" | jq -r -M ".$section.database"`
               if [ "x$database" == "xnull" ]; then
                 echo "Database not set in $section, skipping..."
-                skip="yes"
+                skipsection="yes"
               fi
               if [ $debug == true ]; then
                 echo "host=$host, username=$username, password=$password, database=$database, schedule=$schedule" >> $LOGFILE
               fi
 
-
       ;;
 
       *)
-              skip="yes"
+              skipsection="yes"
       ;;
     esac
 
-    if [ $skip == "no" ]; then
-      $debug && echo "Processing..." >> $LOGFILE
-      dir=`echo "/$mypath/" | sed 's/^\/\/*/\//' | sed 's/\/\/*$/\//'`
-      if [ $cpmethod == "s3" ]; then
-        dir="s3://$bucket/$dir$section"
-      else
-        dir=`echo "$mypath/" | sed 's/\/\/*$/\//'`
-        dir="$dir$section"
-      fi
+    if [ $skipsection == "yes" ]; then
+      continue
+    fi
 
-      $debug && echo $dir >> $LOGFILE
+    #declare -p copies
+
+    skipall="yes"
+    for z in $(seq 0 $copyno); do
+      if [ ${copies[$z,"skip"]} != "yes" ]; then
+        skipall="no"
+      else
+        if [ $z -ne 0 ] && [ ${#copies[@]} -ne 1 ]; then
+          echo "Skipping copy method : ${copies[$z,"cpmethod"]}, message: ${copies[$z,"message"]}"
+        fi
+      fi
+    done
+
+
+    if [ $skipall == "no" ]; then
+      $debug && echo "Processing..." >> $LOGFILE
       outputfile=""
 
       if [[ ((($schedule == "hourly" ) && ($hour != "00")) || (( $hour == "00") && (( $schedule == "hourly" ) || ($schedule == "daily") || (($schedule == "weekly") && ($weekday == "1")) || (($schedule == "monthly") && ($day=="01")) || (($schedule == "annually") && ("$month/$day" == "01/01")) ))) ]]; then
@@ -375,11 +489,13 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
                     outputfile="$dumpdir/$database.sql.gz"
                     outputbasefile="$database.sql.gz"
                     rm -f "$outputfile"
-		    mysqldump "$extradumpparameters" $MYSQLUSER $MYSQLPASS $MYSQLHOST $MYSQLPORT $database | gzip > "$outputfile"
+		    mysqldump $extradumpparameters $MYSQLUSER $MYSQLPASS $MYSQLHOST $MYSQLPORT $database | gzip > "$outputfile"
                     rc=${PIPESTATUS[0]}
                     $debug && echo "mysqldump $extradumpparameters $MYSQLUSER $MYSQLPASS $MYSQLHOST $MYSQLPORT $database " >> $LOGFILE
                     if [ $rc -ne 0 ]; then
                       echo "mysqldump exited with code = $rc" >> $LOGFILE
+                    else
+                      echo "mysqldump completed successfully" >> $LOGFILE
                     fi
             ;;
             'zebra')
@@ -394,67 +510,65 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
                     rm -f "$outputfile" "$outputfile2"
                     zebradump "$host:$port/$database" "$outputfile2" "$auth"
                     rc=$?
+                    if [ $rc -ne 0 ]; then
+                      echo "zebradump exited with code = $rc" >> $LOGFILE
+                    else
+                      echo "zebradump completed successfully" >> $LOGFILE
+                    fi
             ;;
             *)
             ;;
         esac
 
         if [ $rc -eq 0 ]; then
-          if [[ ((( $hour == "00") && ($day == "01") && ($month == "01") && (( $schedule == "hourly" ) || ($schedule == "daily") || ($schedule == "monthly") || ($schedule == "annually"))) ||
-             (( $hour == "00") && ($month == "01") && ($weekday == "1") && ( $schedule == "weekly" ) && ($dday -lt 8))) ]]; then
-            if [ $cpmethod == "s3" ]; then
-              s3cmd --no-progress -c $S3CFG put "$outputfile" "$dir/annually/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
-            else
-              mkdir -p "$dir/annually/$datestamp"
-              mv "$outputfile" "$dir/annually/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
+          for z in $(seq 0 $copyno); do
+            if [ ${copies[$z,"skip"]} == "yes" ]; then
+              continue
             fi
-          elif [[ ((( $hour == "00") && ($day == "01") && (( $schedule == "hourly" ) || ($schedule == "daily") || ($schedule == "monthly"))) ||
-             (( $hour == "00") && ($weekday == "1") && ( $schedule == "weekly" ) && ($dday -lt 8))) ]]; then
-            if [ $cpmethod == "s3" ]; then
-              s3cmd --no-progress -c $S3CFG put "$outputfile" "$dir/monthly/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
-            else
-              mkdir -p "$dir/monthly/$datestamp"
-              cp "$outputfile" "$dir/monthly/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
-            fi
-          elif [[ (( $hour == "00") && ($weekday == "1") && (( $schedule == "hourly" ) || ($schedule == "daily") || ($schedule == "weekly"))) ]]; then
-            if [ $cpmethod == "s3" ]; then
-              s3cmd --no-progress -c $S3CFG put "$outputfile" "$dir/weekly/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
-            else
-              mkdir -p "$dir/weekly/$datestamp"
-              cp "$outputfile" "$dir/weekly/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
-            fi
-          elif [[ (( $hour == "00") && (( $schedule == "hourly" ) || ($schedule == "daily") )) ]]; then
-            if [ $cpmethod == "s3" ]; then
-              s3cmd --no-progress -c $S3CFG put "$outputfile" "$dir/daily/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
-            else
-              mkdir -p "$dir/daily/$datestamp"
-              cp "$outputfile" "$dir/daily/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
-            fi
-          elif [ $schedule == "hourly" ]; then
-            if [ $cpmethod == "s3" ]; then
-              s3cmd --no-progress -c $S3CFG put "$outputfile" "$dir/hourly/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
-            else
-              mkdir -p "$dir/hourly/$datestamp"
-              cp "$outputfile" "$dir/hourly/$datestamp/$outputbasefile" 2>&1 >> $LOGFILE
-            fi
-          fi
+            cpmethod=${copies[$z,"cpmethod"]}
+            bucket=${copies[$z,"bucket"]}
+            S3CFG=${copies[$z,"s3cfg"]}
+            mypath=${copies[$z,"path"]}
+            sshuser=${copies[$z,"sshuser"]}
+            sshparams=${copies[$z,"sshparams"]}
 
-          [ $hours == "all" ] || prune "$dir" "hourly" $hours $cpmethod
-          [ $days == "all" ] || prune "$dir" "daily" $days $cpmethod
-          [ $weeks == "all" ] || prune "$dir" "weekly" $weeks $cpmethod
-          [ $months == "all" ] || prune "$dir" "monthly" $months $cpmethod
-          [ $years == "all" ] || prune "$dir" "annually" $years $cpmethod
+            dir=`echo "/$mypath/" | sed 's/^\/\/*/\//' | sed 's/\/\/*$/\//'`
+            if [ $cpmethod == "s3" ]; then
+              dir="s3://$bucket/$dir$section"
+            else
+              dir=`echo "$mypath/" | sed 's/\/\/*$/\//'`
+              dir="$dir$section"
+            fi
 
+            $debug && echo $dir >> $LOGFILE
+            if [[ ((( $hour == "00") && ($day == "01") && ($month == "01") && (( $schedule == "hourly" ) || ($schedule == "daily") || ($schedule == "monthly") || ($schedule == "annually"))) ||
+               (( $hour == "00") && ($month == "01") && ($weekday == "1") && ( $schedule == "weekly" ) && ($dday -lt 8))) ]]; then
+              copyDump $cpmethod "$outputfile" "$outputbasefile" "$dir/annually/$datestamp" $sshuser "$sshparams" $S3CFG
+            elif [[ ((( $hour == "00") && ($day == "01") && (( $schedule == "hourly" ) || ($schedule == "daily") || ($schedule == "monthly"))) ||
+               (( $hour == "00") && ($weekday == "1") && ( $schedule == "weekly" ) && ($dday -lt 8))) ]]; then
+              copyDump $cpmethod "$outputfile" "$outputbasefile" "$dir/monthly/$datestamp" $sshuser "$sshparams" $S3CFG
+            elif [[ (( $hour == "00") && ($weekday == "1") && (( $schedule == "hourly" ) || ($schedule == "daily") || ($schedule == "weekly"))) ]]; then
+              copyDump $cpmethod "$outputfile" "$outputbasefile" "$dir/weekly/$datestamp" $sshuser "$sshparams" $S3CFG
+            elif [[ (( $hour == "00") && (( $schedule == "hourly" ) || ($schedule == "daily") )) ]]; then
+              copyDump $cpmethod "$outputfile" "$outputbasefile" "$dir/daily/$datestamp" $sshuser "$sshparams" $S3CFG
+            elif [ $schedule == "hourly" ]; then
+              copyDump $cpmethod "$outputfile" "$outputbasefile" "$dir/hourly/$datestamp" $sshuser "$sshparams" $S3CFG
+            fi
+
+            [ $hours == "all" ] || prune "$dir" "hourly" $hours $cpmethod $sshuser "$sshparams" $S3CFG
+            [ $days == "all" ] || prune "$dir" "daily" $days $cpmethod $sshuser "$sshparams" $S3CFG
+            [ $weeks == "all" ] || prune "$dir" "weekly" $weeks $cpmethod $sshuser "$sshparams" $S3CFG
+            [ $months == "all" ] || prune "$dir" "monthly" $months $cpmethod $sshuser "$sshparams" $S3CFG
+            [ $years == "all" ] || prune "$dir" "annually" $years $cpmethod $sshuser "$sshparams" $S3CFG
+
+          done
           if [ -n "$outputfile" ]; then
             rm -f "$dumpdir/$outputbasefile"
           fi
         else
           echo "Failed to perform dump for $section" >> $LOGFILE
         fi
-
       fi
     fi
   fi
 done
-
-#

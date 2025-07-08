@@ -482,7 +482,7 @@ for section in `toml2js "$config" | jq -r -M 'keys' | jq -r -M '.[]'`; do
       $debug && echo "Processing..." >> $LOGFILE
       outputfile=""
 
-      if [[ ((($schedule == "hourly" ) && ($hour != "00")) || (( $hour == "00") && (( $schedule == "hourly" ) || ($schedule == "daily") || (($schedule == "weekly") && ($weekday == "1")) || (($schedule == "monthly") && ($day=="01")) || (($schedule == "annually") && ("$month/$day" == "01/01")) ))) ]]; then
+      if [[ ((($schedule == "hourly" ) && ($hour != "00")) || (( $hour == "00") && (( $schedule == "hourly" ) || ($schedule == "daily") || (($schedule == "weekly") && ($weekday == "1")) || (($schedule == "monthly") && ($day == "01")) || (($schedule == "annually") && ("$month/$day" == "01/01")) ))) ]]; then
 
         case "$type" in
             'mysql')
